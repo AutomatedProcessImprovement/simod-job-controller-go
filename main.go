@@ -20,11 +20,18 @@ import (
 )
 
 var (
-	version             = "0.1.2"
+	version = "0.1.2"
+
 	brokerUrl           = os.Getenv("BROKER_URL")
 	exchangeName        = os.Getenv("SIMOD_EXCHANGE_NAME")
 	simodDockerImage    = os.Getenv("SIMOD_DOCKER_IMAGE")
 	kubernetesNamespace = os.Getenv("KUBERNETES_NAMESPACE")
+
+	// requestsBaseDir is the base directory where all requests are stored on the attached volume
+	requestsBaseDir = "/tmp/simod-volume/data/requests"
+
+	// configurationFileName is the name of the configuration file that is expected to be present in the request directory
+	configurationFileName = "configuration.yaml"
 )
 
 func main() {
@@ -171,20 +178,18 @@ func submitJob(requestId string) (jobName string, err error) {
 		return "", fmt.Errorf("failed to setup jobs client: %s", err)
 	}
 
-	backoffLimit := int32(0)
-	ttlSeconds := int32(60 * 3)
-
-	jobName = jobNameFromRequestId(requestId)
-	requestOutputDir := fmt.Sprintf("/tmp/simod-volume/data/requests/%s", requestId)
-	configPath := path.Join(requestOutputDir, "configuration.yaml")
+	requestOutputDir := path.Join(requestsBaseDir, requestId)
+	configPath := path.Join(requestOutputDir, configurationFileName)
 	resultsOutputDir := path.Join(requestOutputDir, "results")
-
 	err = os.MkdirAll(resultsOutputDir, 0755)
 	if err != nil {
 		return "", fmt.Errorf("failed to create results output dir at %s: %s", resultsOutputDir, err)
 	}
 
-	job := makeJob(jobName, backoffLimit, ttlSeconds, configPath, resultsOutputDir)
+	job := makeJobForRequest(requestId, configPath, resultsOutputDir)
+	if job == nil {
+		return "", fmt.Errorf("failed to create job for %s", requestId)
+	}
 
 	ctx := context.Background()
 	_, err = jobsClient.Create(ctx, job, metav1.CreateOptions{})
@@ -192,7 +197,7 @@ func submitJob(requestId string) (jobName string, err error) {
 		return "", fmt.Errorf("failed to create job for %s: %s", requestId, err)
 	}
 
-	return jobName, err
+	return job.Name, err
 }
 
 func watchJobAndPrepareArchive(jobName, requestId string, brokerChannel *amqp.Channel) {
@@ -299,7 +304,7 @@ func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
 func prepareArchive(requestId string) (archivePath string, err error) {
 	log.Printf("Preparing archive for %s", requestId)
 
-	requestOutputDir := fmt.Sprintf("/tmp/simod-volume/data/requests/%s", requestId)
+	requestOutputDir := path.Join(requestsBaseDir, requestId)
 	resultsDir := path.Join(requestOutputDir, "results")
 	archivePath = path.Join(requestOutputDir, fmt.Sprintf("%s.tar.gz", requestId))
 
@@ -310,7 +315,12 @@ func jobNameFromRequestId(requestId string) string {
 	return fmt.Sprintf("simod-%s", requestId)
 }
 
-func makeJob(jobName string, backoffLimit int32, ttlSeconds int32, configPath string, resultsOutputDir string) *batchv1.Job {
+func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *batchv1.Job {
+	backoffLimit := int32(0)
+	ttlSeconds := int32(60 * 3)
+
+	jobName := jobNameFromRequestId(requestId)
+
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
