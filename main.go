@@ -78,6 +78,7 @@ func validateEnv() {
 }
 
 func printEnv() {
+	log.Printf("Version: %s", version)
 	log.Printf("BROKER_URL: %s", brokerUrl)
 	log.Printf("SIMOD_EXCHANGE_NAME: %s", exchangeName)
 	log.Printf("SIMOD_DOCKER_IMAGE: %s", simodDockerImage)
@@ -225,8 +226,10 @@ func watchJobAndPrepareArchive(jobName, requestId string, brokerChannel *amqp.Ch
 
 		if status == "succeeded" {
 			_, err = prepareArchive(requestId)
-			logOnError(err, "failed to prepare archive")
-			publishJobStatus(requestId, "failed", brokerChannel)
+			if err != nil {
+				log.Printf("failed to prepare archive for %s", requestId)
+				publishJobStatus(requestId, "failed", brokerChannel)
+			}
 			break
 		} else if status == "failed" {
 			break
