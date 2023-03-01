@@ -9,6 +9,7 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/walle/targz"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -143,27 +144,13 @@ func run() {
 		}
 	}()
 
-	log.Printf("[*] Waiting for messages. To exit press CTRL+C")
+	log.Printf("Waiting for messages")
 	<-forever
-}
-
-func failOnError(err error, msg string) {
-	if err != nil {
-		log.Fatalf("%s: %s", msg, err)
-	}
-}
-
-func logOnError(err error, msg string) {
-	if err != nil {
-		log.Printf("%s: %s", msg, err)
-	}
 }
 
 func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 	requestId := string(d.Body)
-	routingKey := d.RoutingKey
-
-	log.Printf("Received %s with status %s", requestId, routingKey)
+	log.Printf("Received %s", requestId)
 
 	jobName, err := submitJob(requestId)
 	d.Ack(false)
@@ -172,7 +159,7 @@ func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 		log.Printf("Failed to submit job for %s: %s", requestId, err)
 		publishJobStatus(requestId, "failed", brokerChannel)
 	} else {
-		watchJob(jobName, requestId, brokerChannel)
+		watchJobAndPrepareArchive(jobName, requestId, brokerChannel)
 	}
 }
 
@@ -208,38 +195,42 @@ func submitJob(requestId string) (jobName string, err error) {
 	return jobName, err
 }
 
-func watchJob(jobName, requestId string, brokerChannel *amqp.Channel) {
-	log.Printf("Watching job %s for %s", jobName, requestId)
+func watchJobAndPrepareArchive(jobName, requestId string, brokerChannel *amqp.Channel) {
+	log.Printf("Watching job %s", jobName)
 
 	jobsClient, err := setupAndMakeJobsClient()
 	logOnError(err, "failed to setup jobs client")
-
-	ctx := context.Background()
 
 	var previousStatus string
 	var delaySeconds int64 = 10
 
 	for {
+		ctx := context.Background()
 		job, err := jobsClient.Get(ctx, jobName, metav1.GetOptions{})
 		logOnError(err, "failed to get job")
 
 		status := getJobStatus(job)
 
 		if status != previousStatus {
-			log.Printf("Job %s for %s is %s", jobName, requestId, status)
+			log.Printf("Job %s is %s", jobName, status)
 			previousStatus = status
 
 			publishJobStatus(requestId, status, brokerChannel)
 		}
 
-		if status == "succeeded" || status == "failed" {
+		if status == "succeeded" {
+			_, err = prepareArchive(requestId)
+			logOnError(err, "failed to prepare archive")
+			publishJobStatus(requestId, "failed", brokerChannel)
+			break
+		} else if status == "failed" {
 			break
 		}
 
 		time.Sleep(time.Duration(delaySeconds) * time.Second)
 	}
 
-	log.Printf("Finished watching job %s for %s", jobName, requestId)
+	log.Printf("Finished watching job %s", jobName)
 }
 
 func setupAndMakeJobsClient() (v1.JobInterface, error) {
@@ -272,6 +263,47 @@ func getJobStatus(job *batchv1.Job) string {
 	} else {
 		return ""
 	}
+}
+
+func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
+	log.Printf("Publishing status %s for %s", status, requestId)
+
+	err := brokerChannel.ExchangeDeclare(
+		exchangeName,
+		"topic",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	failOnError(err, "Failed to declare an exchange")
+
+	routingKey := fmt.Sprintf("requests.status.%s", status)
+
+	ctx := context.Background()
+	err = brokerChannel.PublishWithContext(
+		ctx,
+		exchangeName,
+		routingKey,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "text/plain",
+			Body:        []byte(requestId),
+		},
+	)
+	failOnError(err, "Failed to publish a message")
+}
+
+func prepareArchive(requestId string) (archivePath string, err error) {
+	log.Printf("Preparing archive for %s", requestId)
+
+	requestOutputDir := fmt.Sprintf("/tmp/simod-volume/data/requests/%s", requestId)
+	resultsDir := path.Join(requestOutputDir, "results")
+	archivePath = path.Join(requestOutputDir, fmt.Sprintf("%s.tar.gz", requestId))
+
+	return archivePath, targz.Compress(resultsDir, archivePath)
 }
 
 func jobNameFromRequestId(requestId string) string {
@@ -330,33 +362,14 @@ func makeJob(jobName string, backoffLimit int32, ttlSeconds int32, configPath st
 	return job
 }
 
-func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
-	log.Printf("Publishing status %s for %s", status, requestId)
+func failOnError(err error, msg string) {
+	if err != nil {
+		log.Fatalf("%s: %s", msg, err)
+	}
+}
 
-	err := brokerChannel.ExchangeDeclare(
-		exchangeName,
-		"topic",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	failOnError(err, "Failed to declare an exchange")
-
-	routingKey := fmt.Sprintf("requests.status.%s", status)
-
-	ctx := context.Background()
-	err = brokerChannel.PublishWithContext(
-		ctx,
-		exchangeName,
-		routingKey,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(requestId),
-		},
-	)
-	failOnError(err, "Failed to publish a message")
+func logOnError(err error, msg string) {
+	if err != nil {
+		log.Printf("%s: %s", msg, err)
+	}
 }
