@@ -27,9 +27,6 @@ var (
 )
 
 func main() {
-	validateEnv()
-	printEnv()
-
 	args := os.Args[1:]
 	if len(args) == 0 {
 		fmt.Println("No arguments provided")
@@ -43,6 +40,8 @@ func main() {
 		fmt.Println(version)
 		os.Exit(0)
 	case "run":
+		validateEnv()
+		printEnv()
 		log.Println("Simod job controller has started")
 	default:
 		fmt.Printf("Unknown command: %s", cmd)
