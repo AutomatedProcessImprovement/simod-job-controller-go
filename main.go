@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	version             = "0.1.0"
+	version             = "0.1.1"
 	brokerUrl           = os.Getenv("BROKER_URL")
 	exchangeName        = os.Getenv("SIMOD_EXCHANGE_NAME")
 	simodDockerImage    = os.Getenv("SIMOD_DOCKER_IMAGE")
