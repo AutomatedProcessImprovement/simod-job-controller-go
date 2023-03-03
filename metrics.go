@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -13,6 +14,8 @@ type metrics struct {
 	jobsDurations *prometheus.HistogramVec
 
 	jobsDurationsMap map[string][]*timeRecord
+
+	mx *sync.Mutex
 }
 
 type timeRecord struct {
@@ -59,6 +62,9 @@ func newMetrics(registry prometheus.Registerer) *metrics {
 }
 
 func (m *metrics) addNewJob(status, requestId string) {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
 	m.jobsTotal.WithLabelValues(status, requestId).Inc()
 	m.jobsGauges.WithLabelValues(status, requestId).Inc()
 	m.jobsDurationsMap[requestId] = make([]*timeRecord, 0)
@@ -71,6 +77,9 @@ func (m *metrics) addNewJob(status, requestId string) {
 }
 
 func (m *metrics) updateJob(previousStatus, newStatus, requestId string) {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
 	if previousStatus == newStatus {
 		log.Printf("new status should be different from the previous one for request %s, %s == %s", requestId, previousStatus, newStatus)
 		return
