@@ -42,7 +42,7 @@ jobs:
 
       - name: Get the version
         id: versioning
-        run: echo "version=$(go run ./main.go version)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(go run . version)" >> "$GITHUB_OUTPUT"
 
       - name: Assign a version tag
         run: |
