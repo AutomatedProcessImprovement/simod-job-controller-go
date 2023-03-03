@@ -15,7 +15,7 @@ type metrics struct {
 
 	jobsDurationsMap map[string][]*timeRecord
 
-	mx *sync.Mutex
+	mx sync.Mutex
 }
 
 type timeRecord struct {
