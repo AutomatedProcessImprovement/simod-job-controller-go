@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	version = "0.2.1"
+	version = "0.2.3"
 
 	brokerUrl           = os.Getenv("BROKER_URL")
 	exchangeName        = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -243,6 +243,9 @@ func watchJobAndPrepareArchive(jobName, requestId, previousStatus string, broker
 		logOnError(err, "failed to get job")
 
 		status := getJobStatus(job)
+		if status == "" {
+			continue
+		}
 
 		if status != previousStatus {
 			log.Printf("Job %s is %s", jobName, status)
@@ -298,6 +301,7 @@ func getJobStatus(job *batchv1.Job) string {
 	} else if job.Status.Active == 1 {
 		return "running"
 	} else {
+		log.Printf("Unknown status for %s: %s", job.Name, job.Status.String())
 		return ""
 	}
 }
