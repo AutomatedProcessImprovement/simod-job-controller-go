@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path"
+	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/walle/targz"
 	batchv1 "k8s.io/api/batch/v1"
@@ -20,7 +24,7 @@ import (
 )
 
 var (
-	version = "0.1.3"
+	version = "0.2.0"
 
 	brokerUrl           = os.Getenv("BROKER_URL")
 	exchangeName        = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -32,6 +36,9 @@ var (
 
 	// configurationFileName is the name of the configuration file that is expected to be present in the request directory
 	configurationFileName = "configuration.yaml"
+
+	// prometheusMetrics is the metrics object that is used to expose metrics to Prometheus
+	prometheusMetrics *metrics
 )
 
 func main() {
@@ -152,23 +159,44 @@ func run() {
 		}
 	}()
 
+	setupMetricsAndServe()
+
 	log.Printf("Waiting for messages")
 	<-forever
+}
+
+func setupMetricsAndServe() {
+	registry := prometheus.NewRegistry()
+	prometheusMetrics = newMetrics(registry)
+
+	go func() {
+		http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
+		http.ListenAndServe(":8080", nil)
+	}()
 }
 
 func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 	requestId := string(d.Body)
 	log.Printf("Received %s", requestId)
 
+	currentStatus := extractStatus(d.RoutingKey)
+	prometheusMetrics.addNewJob(currentStatus, requestId)
+
 	jobName, err := submitJob(requestId)
 	d.Ack(false)
 
 	if err != nil {
 		log.Printf("Failed to submit job for %s: %s", requestId, err)
-		publishJobStatus(requestId, "failed", brokerChannel)
+		newStatus := "failed"
+		publishJobStatus(requestId, newStatus, currentStatus, brokerChannel)
 	} else {
-		watchJobAndPrepareArchive(jobName, requestId, brokerChannel)
+		watchJobAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
 	}
+}
+
+func extractStatus(routingKey string) string {
+	parts := strings.Split(routingKey, ".")
+	return parts[len(parts)-1]
 }
 
 func submitJob(requestId string) (jobName string, err error) {
@@ -201,13 +229,12 @@ func submitJob(requestId string) (jobName string, err error) {
 	return job.Name, err
 }
 
-func watchJobAndPrepareArchive(jobName, requestId string, brokerChannel *amqp.Channel) {
+func watchJobAndPrepareArchive(jobName, requestId, previousStatus string, brokerChannel *amqp.Channel) {
 	log.Printf("Watching job %s", jobName)
 
 	jobsClient, err := setupAndMakeJobsClient()
 	logOnError(err, "failed to setup jobs client")
 
-	var previousStatus string
 	var delaySeconds int64 = 10
 
 	for {
@@ -221,14 +248,14 @@ func watchJobAndPrepareArchive(jobName, requestId string, brokerChannel *amqp.Ch
 			log.Printf("Job %s is %s", jobName, status)
 			previousStatus = status
 
-			publishJobStatus(requestId, status, brokerChannel)
+			publishJobStatus(requestId, status, previousStatus, brokerChannel)
 		}
 
 		if status == "succeeded" {
 			_, err = prepareArchive(requestId)
 			if err != nil {
 				log.Printf("failed to prepare archive for %s", requestId)
-				publishJobStatus(requestId, "failed", brokerChannel)
+				publishJobStatus(requestId, "failed", previousStatus, brokerChannel)
 			}
 			break
 		} else if status == "failed" {
@@ -273,7 +300,7 @@ func getJobStatus(job *batchv1.Job) string {
 	}
 }
 
-func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
+func publishJobStatus(requestId, status, previousStatus string, brokerChannel *amqp.Channel) {
 	log.Printf("Publishing status %s for %s", status, requestId)
 
 	err := brokerChannel.ExchangeDeclare(
@@ -302,6 +329,8 @@ func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
 		},
 	)
 	failOnError(err, "Failed to publish a message")
+
+	prometheusMetrics.updateJob(previousStatus, status, requestId)
 }
 
 func prepareArchive(requestId string) (archivePath string, err error) {
