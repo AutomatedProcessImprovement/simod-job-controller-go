@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	version = "0.2.0"
+	version = "0.2.1"
 
 	brokerUrl           = os.Getenv("BROKER_URL")
 	exchangeName        = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -188,7 +188,7 @@ func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 	if err != nil {
 		log.Printf("Failed to submit job for %s: %s", requestId, err)
 		newStatus := "failed"
-		publishJobStatus(requestId, newStatus, currentStatus, brokerChannel)
+		publishJobStatus(requestId, newStatus, brokerChannel)
 	} else {
 		watchJobAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
 	}
@@ -246,16 +246,18 @@ func watchJobAndPrepareArchive(jobName, requestId, previousStatus string, broker
 
 		if status != previousStatus {
 			log.Printf("Job %s is %s", jobName, status)
-			previousStatus = status
 
-			publishJobStatus(requestId, status, previousStatus, brokerChannel)
+			publishJobStatus(requestId, status, brokerChannel)
+			prometheusMetrics.updateJob(previousStatus, status, requestId)
+
+			previousStatus = status
 		}
 
 		if status == "succeeded" {
 			_, err = prepareArchive(requestId)
 			if err != nil {
 				log.Printf("failed to prepare archive for %s", requestId)
-				publishJobStatus(requestId, "failed", previousStatus, brokerChannel)
+				publishJobStatus(requestId, "failed", brokerChannel)
 			}
 			break
 		} else if status == "failed" {
@@ -300,7 +302,7 @@ func getJobStatus(job *batchv1.Job) string {
 	}
 }
 
-func publishJobStatus(requestId, status, previousStatus string, brokerChannel *amqp.Channel) {
+func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
 	log.Printf("Publishing status %s for %s", status, requestId)
 
 	err := brokerChannel.ExchangeDeclare(
@@ -329,8 +331,6 @@ func publishJobStatus(requestId, status, previousStatus string, brokerChannel *a
 		},
 	)
 	failOnError(err, "Failed to publish a message")
-
-	prometheusMetrics.updateJob(previousStatus, status, requestId)
 }
 
 func prepareArchive(requestId string) (archivePath string, err error) {
@@ -376,12 +376,12 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 							},
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("1"),
-									corev1.ResourceMemory: resource.MustParse("1Gi"),
+									corev1.ResourceCPU:    resource.MustParse("4"),
+									corev1.ResourceMemory: resource.MustParse("4Gi"),
 								},
 								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("100m"),
-									corev1.ResourceMemory: resource.MustParse("128Mi"),
+									corev1.ResourceCPU:    resource.MustParse("1"),
+									corev1.ResourceMemory: resource.MustParse("1Gi"),
 								},
 							},
 						},
