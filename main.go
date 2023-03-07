@@ -24,12 +24,16 @@ import (
 )
 
 var (
-	version = "0.2.3"
+	version = "0.2.4"
 
-	brokerUrl           = os.Getenv("BROKER_URL")
-	exchangeName        = os.Getenv("SIMOD_EXCHANGE_NAME")
-	simodDockerImage    = os.Getenv("SIMOD_DOCKER_IMAGE")
-	kubernetesNamespace = os.Getenv("KUBERNETES_NAMESPACE")
+	brokerUrl                     = os.Getenv("BROKER_URL")
+	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
+	simodDockerImage              = os.Getenv("SIMOD_DOCKER_IMAGE")
+	simodJobResourceCpuRequest    = os.Getenv("SIMOD_JOB_RESOURCE_CPU_REQUEST")
+	simodJobResourceCpuLimit      = os.Getenv("SIMOD_JOB_RESOURCE_CPU_LIMIT")
+	simodJobResourceMemoryRequest = os.Getenv("SIMOD_JOB_RESOURCE_MEMORY_REQUEST")
+	simodJobResourceMemoryLimit   = os.Getenv("SIMOD_JOB_RESOURCE_MEMORY_LIMIT")
+	kubernetesNamespace           = os.Getenv("KUBERNETES_NAMESPACE")
 
 	// requestsBaseDir is the base directory where all requests are stored on the attached volume
 	requestsBaseDir = "/tmp/simod-volume/data/requests"
@@ -82,6 +86,22 @@ func validateEnv() {
 	if kubernetesNamespace == "" {
 		log.Fatal("KUBERNETES_NAMESPACE is not set")
 	}
+
+	if simodJobResourceCpuRequest == "" {
+		log.Fatal("SIMOD_JOB_RESOURCE_CPU_REQUEST is not set")
+	}
+
+	if simodJobResourceCpuLimit == "" {
+		log.Fatal("SIMOD_JOB_RESOURCE_CPU_LIMIT is not set")
+	}
+
+	if simodJobResourceMemoryRequest == "" {
+		log.Fatal("SIMOD_JOB_RESOURCE_MEMORY_REQUEST is not set")
+	}
+
+	if simodJobResourceMemoryLimit == "" {
+		log.Fatal("SIMOD_JOB_RESOURCE_MEMORY_LIMIT is not set")
+	}
 }
 
 func printEnv() {
@@ -89,6 +109,10 @@ func printEnv() {
 	log.Printf("BROKER_URL: %s", brokerUrl)
 	log.Printf("SIMOD_EXCHANGE_NAME: %s", exchangeName)
 	log.Printf("SIMOD_DOCKER_IMAGE: %s", simodDockerImage)
+	log.Printf("SIMOD_JOB_RESOURCE_CPU_REQUEST: %s", simodJobResourceCpuRequest)
+	log.Printf("SIMOD_JOB_RESOURCE_CPU_LIMIT: %s", simodJobResourceCpuLimit)
+	log.Printf("SIMOD_JOB_RESOURCE_MEMORY_REQUEST: %s", simodJobResourceMemoryRequest)
+	log.Printf("SIMOD_JOB_RESOURCE_MEMORY_LIMIT: %s", simodJobResourceMemoryLimit)
 	log.Printf("KUBERNETES_NAMESPACE: %s", kubernetesNamespace)
 }
 
@@ -380,12 +404,12 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 							},
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("4"),
-									corev1.ResourceMemory: resource.MustParse("4Gi"),
+									corev1.ResourceCPU:    resource.MustParse(simodJobResourceCpuLimit),
+									corev1.ResourceMemory: resource.MustParse(simodJobResourceMemoryLimit),
 								},
 								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("1"),
-									corev1.ResourceMemory: resource.MustParse("1Gi"),
+									corev1.ResourceCPU:    resource.MustParse(simodJobResourceCpuRequest),
+									corev1.ResourceMemory: resource.MustParse(simodJobResourceMemoryRequest),
 								},
 							},
 						},
