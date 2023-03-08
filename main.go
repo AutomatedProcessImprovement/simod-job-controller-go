@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	version = "0.3.1"
+	version = "0.3.2"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -52,7 +52,7 @@ var (
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
-		fmt.Println("No arguments provided")
+		fmt.Println("no arguments provided")
 		os.Exit(1)
 	}
 
@@ -65,9 +65,9 @@ func main() {
 	case "run":
 		validateEnv()
 		printEnv()
-		log.Println("Simod job controller has started")
+		log.Println("simod job controller has started")
 	default:
-		fmt.Printf("Unknown command: %s", cmd)
+		fmt.Printf("unknown command: %s", cmd)
 		os.Exit(1)
 	}
 
@@ -109,7 +109,7 @@ func validateEnv() {
 }
 
 func printEnv() {
-	log.Printf("Version: %s", version)
+	log.Printf("version: %s", version)
 	log.Printf("BROKER_URL: %s", brokerUrl)
 	log.Printf("SIMOD_EXCHANGE_NAME: %s", exchangeName)
 	log.Printf("SIMOD_DOCKER_IMAGE: %s", simodDockerImage)
@@ -124,6 +124,11 @@ func run() {
 	conn, err := amqp.Dial(brokerUrl)
 	failOnError(err, "failed to connect to RabbitMQ")
 	defer conn.Close()
+
+	go func() {
+		log.Printf("closing: %s", <-conn.NotifyClose(make(chan *amqp.Error)))
+		os.Exit(1)
+	}()
 
 	channel, err := conn.Channel()
 	failOnError(err, "failed to open a channel")
@@ -189,7 +194,7 @@ func run() {
 
 	setupMetricsAndServe()
 
-	log.Printf("Waiting for messages")
+	log.Printf("waiting for messages")
 	<-forever
 }
 
@@ -205,7 +210,7 @@ func setupMetricsAndServe() {
 
 func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 	requestId := string(d.Body)
-	log.Printf("Received %s", requestId)
+	log.Printf("received %s", requestId)
 
 	currentStatus := extractStatus(d.RoutingKey)
 	prometheusMetrics.addNewJob(currentStatus, requestId)
@@ -214,7 +219,7 @@ func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 	d.Ack(false)
 
 	if err != nil {
-		log.Printf("Failed to submit job for %s: %s", requestId, err)
+		log.Printf("failed to submit job for %s: %s", requestId, err)
 		newStatus := "failed"
 		publishJobStatus(requestId, newStatus, brokerChannel)
 	} else {
@@ -228,7 +233,7 @@ func extractStatus(routingKey string) string {
 }
 
 func submitJob(requestId string) (jobName string, err error) {
-	log.Printf("Submitting job for %s", requestId)
+	log.Printf("submitting job for %s", requestId)
 
 	jobsClient, err := setupAndMakeJobsClient()
 	if err != nil {
@@ -258,11 +263,11 @@ func submitJob(requestId string) (jobName string, err error) {
 }
 
 func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, brokerChannel *amqp.Channel) {
-	log.Printf("Starting pods watcher for job %s", jobName)
+	log.Printf("starting pods watcher for job %s", jobName)
 
 	podsClient, err := setupAndMakePodsClient()
 	if err != nil {
-		log.Printf("Failed to setup pods client: %s", err)
+		log.Printf("failed to setup pods client: %s", err)
 		return
 	}
 
@@ -271,7 +276,7 @@ func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, br
 		Watch:         true,
 	})
 	if err != nil {
-		log.Printf("Failed to watch pods for job %s: %s", jobName, err)
+		log.Printf("failed to watch pods for job %s: %s", jobName, err)
 		return
 	}
 
@@ -281,23 +286,23 @@ func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, br
 		for event := range podsWatcherChan {
 			switch event.Type {
 			case watch.Error:
-				log.Printf("Error watching pods for job %s: %s", jobName, event.Object)
+				log.Printf("error watching pods for job %s: %s", jobName, event.Object)
 				podsWatcher.Stop()
 				return
 			case watch.Deleted:
-				log.Printf("Pod for job %s was deleted", jobName)
+				log.Printf("pod for job %s was deleted", jobName)
 				podsWatcher.Stop()
 				return
 			case watch.Added, watch.Modified:
 				pod, ok := event.Object.(*corev1.Pod)
 				if !ok {
-					log.Printf("Failed to cast event object to pod")
+					log.Printf("failed to cast event object to pod")
 					podsWatcher.Stop()
 					return
 				}
 
 				podStatus := parsePodStatus(pod)
-				log.Printf("Pod %s for job %s is %s", pod.Name, jobName, podStatus)
+				log.Printf("pod %s for job %s is %s", pod.Name, jobName, podStatus)
 
 				if podStatus == "" {
 					continue
@@ -311,7 +316,7 @@ func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, br
 
 				if podStatus == "succeeded" {
 					if _, err := prepareArchive(requestId); err != nil {
-						log.Printf("Failed to prepare archive for %s", requestId)
+						log.Printf("failed to prepare archive for %s", requestId)
 						publishJobStatus(requestId, "failed", brokerChannel)
 					}
 					podsWatcher.Stop()
@@ -321,11 +326,11 @@ func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, br
 					return
 				}
 			default:
-				log.Printf("Unhandled pod's event type for job %s: %s", jobName, event.Type)
+				log.Printf("unhandled pod's event type for job %s: %s", jobName, event.Type)
 			}
 		}
 
-		log.Printf("Pods watcher for job %s stopped", jobName)
+		log.Printf("pods watcher for job %s stopped", jobName)
 	}()
 }
 
@@ -384,7 +389,7 @@ func setupKubernetesIfNotSet() (*kubernetes.Clientset, error) {
 }
 
 func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
-	log.Printf("Publishing status %s for %s", status, requestId)
+	log.Printf("publishing status %s for %s", status, requestId)
 
 	err := brokerChannel.ExchangeDeclare(
 		exchangeName,
@@ -395,7 +400,7 @@ func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
 		false,
 		nil,
 	)
-	failOnError(err, "Failed to declare an exchange")
+	failOnError(err, "failed to declare an exchange")
 
 	routingKey := fmt.Sprintf("requests.status.%s", status)
 
@@ -415,7 +420,7 @@ func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
 }
 
 func prepareArchive(requestId string) (archivePath string, err error) {
-	log.Printf("Preparing archive for %s", requestId)
+	log.Printf("preparing archive for %s", requestId)
 
 	requestOutputDir := path.Join(requestsBaseDir, requestId)
 	resultsDir := path.Join(requestOutputDir, "results")
