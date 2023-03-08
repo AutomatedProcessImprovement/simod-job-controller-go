@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -26,7 +25,7 @@ import (
 )
 
 var (
-	version = "0.3.0"
+	version = "0.3.1"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -219,8 +218,7 @@ func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 		newStatus := "failed"
 		publishJobStatus(requestId, newStatus, brokerChannel)
 	} else {
-		// watchJobAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
-		watchJobAndPodsAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
+		watchPodsAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
 	}
 }
 
@@ -259,125 +257,12 @@ func submitJob(requestId string) (jobName string, err error) {
 	return job.Name, err
 }
 
-func watchJobAndPrepareArchive(jobName, requestId, previousStatus string, brokerChannel *amqp.Channel) {
-	log.Printf("Watching job %s", jobName)
-
-	jobsClient, err := setupAndMakeJobsClient()
-	logOnError(err, "failed to setup jobs client")
-
-	var delaySeconds int64 = 10
-
-	for {
-		ctx := context.Background()
-		job, err := jobsClient.Get(ctx, jobName, metav1.GetOptions{})
-		logOnError(err, "failed to get job")
-
-		status := parseJobStatus(job)
-		if status == "" {
-			continue
-		}
-
-		if status != previousStatus {
-			log.Printf("Job %s is %s", jobName, status)
-
-			publishJobStatus(requestId, status, brokerChannel)
-			prometheusMetrics.updateJob(previousStatus, status, requestId)
-
-			previousStatus = status
-		}
-
-		if status == "succeeded" {
-			_, err = prepareArchive(requestId)
-			if err != nil {
-				log.Printf("failed to prepare archive for %s", requestId)
-				publishJobStatus(requestId, "failed", brokerChannel)
-			}
-			break
-		} else if status == "failed" {
-			break
-		}
-
-		time.Sleep(time.Duration(delaySeconds) * time.Second)
-	}
-
-	log.Printf("Finished watching job %s", jobName)
-}
-
-func watchJobAndPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, brokerChannel *amqp.Channel) {
-	log.Printf("Watching job %s", jobName)
-
-	jobsClient, err := setupAndMakeJobsClient()
-	if err != nil {
-		log.Printf("failed to setup jobs client: %s", err)
-		return
-	}
-
-	jobWatcher, err := jobsClient.Watch(context.Background(), metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("metadata.name=%s", jobName),
-		Watch:         true,
-	})
-	if err != nil {
-		log.Printf("failed to watch job %s: %s", jobName, err)
-		return
-	}
-
-	jobWatcherChan := jobWatcher.ResultChan()
-
-	go func() {
-		for event := range jobWatcherChan {
-			switch event.Type {
-			case watch.Error:
-				log.Printf("error watching job %s: %s", jobName, event.Object)
-				jobWatcher.Stop()
-				return
-			case watch.Deleted:
-				log.Printf("job %s was deleted", jobName)
-				jobWatcher.Stop()
-				return
-			case watch.Added, watch.Modified:
-				job, ok := event.Object.(*batchv1.Job)
-				if !ok {
-					log.Printf("failed to cast event object to job")
-					jobWatcher.Stop()
-					return
-				}
-
-				jobStatus := parseJobStatus(job)
-				log.Printf("job %s is %s", jobName, jobStatus)
-
-				if jobStatus == "" {
-					continue
-				}
-
-				// if jobStatus != previousJobStatus {
-				// 	publishJobStatus(requestId, jobStatus, brokerChannel)
-				// 	prometheusMetrics.updateJob(previousJobStatus, jobStatus, requestId)
-				// 	previousJobStatus = jobStatus
-				// }
-
-				if jobStatus == "succeeded" {
-					// _, err := prepareArchive(requestId)
-					// if err != nil {
-					// log.Printf("failed to prepare archive for %s", requestId)
-					// publishJobStatus(requestId, "failed", brokerChannel)
-					// }
-					jobWatcher.Stop()
-					return
-				} else if jobStatus == "failed" {
-					jobWatcher.Stop()
-					return
-				}
-			default:
-				log.Printf("unhandled event type for job %s: %s", jobName, event.Type)
-			}
-		}
-	}()
-
-	// watch job pods
+func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, brokerChannel *amqp.Channel) {
+	log.Printf("Starting pods watcher for job %s", jobName)
 
 	podsClient, err := setupAndMakePodsClient()
 	if err != nil {
-		log.Printf("failed to setup pods client: %s", err)
+		log.Printf("Failed to setup pods client: %s", err)
 		return
 	}
 
@@ -386,7 +271,7 @@ func watchJobAndPodsAndPrepareArchive(jobName, requestId, previousJobStatus stri
 		Watch:         true,
 	})
 	if err != nil {
-		log.Printf("failed to watch pods for job %s: %s", jobName, err)
+		log.Printf("Failed to watch pods for job %s: %s", jobName, err)
 		return
 	}
 
@@ -396,23 +281,23 @@ func watchJobAndPodsAndPrepareArchive(jobName, requestId, previousJobStatus stri
 		for event := range podsWatcherChan {
 			switch event.Type {
 			case watch.Error:
-				log.Printf("error watching pods for job %s: %s", jobName, event.Object)
+				log.Printf("Error watching pods for job %s: %s", jobName, event.Object)
 				podsWatcher.Stop()
 				return
 			case watch.Deleted:
-				log.Printf("pod for job %s was deleted", jobName)
+				log.Printf("Pod for job %s was deleted", jobName)
 				podsWatcher.Stop()
 				return
 			case watch.Added, watch.Modified:
 				pod, ok := event.Object.(*corev1.Pod)
 				if !ok {
-					log.Printf("failed to cast event object to pod")
+					log.Printf("Failed to cast event object to pod")
 					podsWatcher.Stop()
 					return
 				}
 
 				podStatus := parsePodStatus(pod)
-				log.Printf("pod %s is %s", pod.Name, podStatus)
+				log.Printf("Pod %s for job %s is %s", pod.Name, jobName, podStatus)
 
 				if podStatus == "" {
 					continue
@@ -425,9 +310,8 @@ func watchJobAndPodsAndPrepareArchive(jobName, requestId, previousJobStatus stri
 				}
 
 				if podStatus == "succeeded" {
-					_, err := prepareArchive(requestId)
-					if err != nil {
-						log.Printf("failed to prepare archive for %s", requestId)
+					if _, err := prepareArchive(requestId); err != nil {
+						log.Printf("Failed to prepare archive for %s", requestId)
 						publishJobStatus(requestId, "failed", brokerChannel)
 					}
 					podsWatcher.Stop()
@@ -437,9 +321,11 @@ func watchJobAndPodsAndPrepareArchive(jobName, requestId, previousJobStatus stri
 					return
 				}
 			default:
-				log.Printf("unhandled event type for pod for job %s: %s", jobName, event.Type)
+				log.Printf("Unhandled pod's event type for job %s: %s", jobName, event.Type)
 			}
 		}
+
+		log.Printf("Pods watcher for job %s stopped", jobName)
 	}()
 }
 
@@ -495,23 +381,6 @@ func setupKubernetesIfNotSet() (*kubernetes.Clientset, error) {
 	}
 
 	return kubernetesClientset, nil
-}
-
-func parseJobStatus(job *batchv1.Job) string {
-	if job == nil {
-		return ""
-	}
-
-	if job.Status.Succeeded == 1 {
-		return "succeeded"
-	} else if job.Status.Failed == 1 {
-		return "failed"
-	} else if job.Status.Active == 1 {
-		return "running"
-	} else {
-		log.Printf("Unknown status for %s: %s", job.Name, job.Status.String())
-		return ""
-	}
 }
 
 func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
