@@ -18,13 +18,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-	v1 "k8s.io/client-go/kubernetes/typed/batch/v1"
+	clientBatchV1 "k8s.io/client-go/kubernetes/typed/batch/v1"
+	clientCoreV1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 )
 
 var (
-	version = "0.2.4"
+	version = "0.3.0"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -43,6 +45,9 @@ var (
 
 	// prometheusMetrics is the metrics object that is used to expose metrics to Prometheus
 	prometheusMetrics *metrics
+
+	// kubernetesClientset is the clientset that is used to interact with the Kubernetes API
+	kubernetesClientset *kubernetes.Clientset
 )
 
 func main() {
@@ -214,7 +219,8 @@ func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 		newStatus := "failed"
 		publishJobStatus(requestId, newStatus, brokerChannel)
 	} else {
-		watchJobAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
+		// watchJobAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
+		watchJobAndPodsAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
 	}
 }
 
@@ -266,7 +272,7 @@ func watchJobAndPrepareArchive(jobName, requestId, previousStatus string, broker
 		job, err := jobsClient.Get(ctx, jobName, metav1.GetOptions{})
 		logOnError(err, "failed to get job")
 
-		status := getJobStatus(job)
+		status := parseJobStatus(job)
 		if status == "" {
 			continue
 		}
@@ -297,15 +303,164 @@ func watchJobAndPrepareArchive(jobName, requestId, previousStatus string, broker
 	log.Printf("Finished watching job %s", jobName)
 }
 
-func setupAndMakeJobsClient() (v1.JobInterface, error) {
-	config, err := rest.InClusterConfig()
+func watchJobAndPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, brokerChannel *amqp.Channel) {
+	log.Printf("Watching job %s", jobName)
+
+	jobsClient, err := setupAndMakeJobsClient()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get kubernetes config: %s", err)
+		log.Printf("failed to setup jobs client: %s", err)
+		return
 	}
 
-	clientset, err := kubernetes.NewForConfig(config)
+	jobWatcher, err := jobsClient.Watch(context.Background(), metav1.ListOptions{
+		FieldSelector: fmt.Sprintf("metadata.name=%s", jobName),
+		Watch:         true,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create kubernetes client: %s", err)
+		log.Printf("failed to watch job %s: %s", jobName, err)
+		return
+	}
+
+	jobWatcherChan := jobWatcher.ResultChan()
+
+	go func() {
+		for event := range jobWatcherChan {
+			switch event.Type {
+			case watch.Error:
+				log.Printf("error watching job %s: %s", jobName, event.Object)
+				jobWatcher.Stop()
+				return
+			case watch.Deleted:
+				log.Printf("job %s was deleted", jobName)
+				jobWatcher.Stop()
+				return
+			case watch.Added, watch.Modified:
+				job, ok := event.Object.(*batchv1.Job)
+				if !ok {
+					log.Printf("failed to cast event object to job")
+					jobWatcher.Stop()
+					return
+				}
+
+				jobStatus := parseJobStatus(job)
+				log.Printf("job %s is %s", jobName, jobStatus)
+
+				if jobStatus == "" {
+					continue
+				}
+
+				// if jobStatus != previousJobStatus {
+				// 	publishJobStatus(requestId, jobStatus, brokerChannel)
+				// 	prometheusMetrics.updateJob(previousJobStatus, jobStatus, requestId)
+				// 	previousJobStatus = jobStatus
+				// }
+
+				if jobStatus == "succeeded" {
+					// _, err := prepareArchive(requestId)
+					// if err != nil {
+					// log.Printf("failed to prepare archive for %s", requestId)
+					// publishJobStatus(requestId, "failed", brokerChannel)
+					// }
+					jobWatcher.Stop()
+					return
+				} else if jobStatus == "failed" {
+					jobWatcher.Stop()
+					return
+				}
+			default:
+				log.Printf("unhandled event type for job %s: %s", jobName, event.Type)
+			}
+		}
+	}()
+
+	// watch job pods
+
+	podsClient, err := setupAndMakePodsClient()
+	if err != nil {
+		log.Printf("failed to setup pods client: %s", err)
+		return
+	}
+
+	podsWatcher, err := podsClient.Watch(context.Background(), metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+		Watch:         true,
+	})
+	if err != nil {
+		log.Printf("failed to watch pods for job %s: %s", jobName, err)
+		return
+	}
+
+	podsWatcherChan := podsWatcher.ResultChan()
+
+	go func() {
+		for event := range podsWatcherChan {
+			switch event.Type {
+			case watch.Error:
+				log.Printf("error watching pods for job %s: %s", jobName, event.Object)
+				podsWatcher.Stop()
+				return
+			case watch.Deleted:
+				log.Printf("pod for job %s was deleted", jobName)
+				podsWatcher.Stop()
+				return
+			case watch.Added, watch.Modified:
+				pod, ok := event.Object.(*corev1.Pod)
+				if !ok {
+					log.Printf("failed to cast event object to pod")
+					podsWatcher.Stop()
+					return
+				}
+
+				podStatus := parsePodStatus(pod)
+				log.Printf("pod %s is %s", pod.Name, podStatus)
+
+				if podStatus == "" {
+					continue
+				}
+
+				if podStatus != previousJobStatus {
+					publishJobStatus(requestId, podStatus, brokerChannel)
+					prometheusMetrics.updateJob(previousJobStatus, podStatus, requestId)
+					previousJobStatus = podStatus
+				}
+
+				if podStatus == "succeeded" {
+					_, err := prepareArchive(requestId)
+					if err != nil {
+						log.Printf("failed to prepare archive for %s", requestId)
+						publishJobStatus(requestId, "failed", brokerChannel)
+					}
+					podsWatcher.Stop()
+					return
+				} else if podStatus == "failed" {
+					podsWatcher.Stop()
+					return
+				}
+			default:
+				log.Printf("unhandled event type for pod for job %s: %s", jobName, event.Type)
+			}
+		}
+	}()
+}
+
+func parsePodStatus(pod *corev1.Pod) string {
+	if pod.Status.Phase == corev1.PodSucceeded {
+		return "succeeded"
+	} else if pod.Status.Phase == corev1.PodFailed {
+		return "failed"
+	} else if pod.Status.Phase == corev1.PodPending {
+		return "pending"
+	} else if pod.Status.Phase == corev1.PodRunning {
+		return "running"
+	}
+
+	return ""
+}
+
+func setupAndMakeJobsClient() (clientBatchV1.JobInterface, error) {
+	clientset, err := setupKubernetesIfNotSet()
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup kubernetes: %s", err)
 	}
 
 	jobsClient := clientset.BatchV1().Jobs(kubernetesNamespace)
@@ -313,7 +468,36 @@ func setupAndMakeJobsClient() (v1.JobInterface, error) {
 	return jobsClient, nil
 }
 
-func getJobStatus(job *batchv1.Job) string {
+func setupAndMakePodsClient() (clientCoreV1.PodInterface, error) {
+	clientset, err := setupKubernetesIfNotSet()
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup kubernetes: %s", err)
+	}
+
+	podsClient := clientset.CoreV1().Pods(kubernetesNamespace)
+
+	return podsClient, nil
+}
+
+func setupKubernetesIfNotSet() (*kubernetes.Clientset, error) {
+	if kubernetesClientset != nil {
+		return kubernetesClientset, nil
+	}
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes config: %s", err)
+	}
+
+	kubernetesClientset, err = kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create kubernetes client: %s", err)
+	}
+
+	return kubernetesClientset, nil
+}
+
+func parseJobStatus(job *batchv1.Job) string {
 	if job == nil {
 		return ""
 	}
