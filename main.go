@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	version = "0.4.2"
+	version = "0.4.3"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -53,6 +53,8 @@ var (
 	kubernetesClientset *kubernetes.Clientset
 
 	simodUrl = fmt.Sprintf("http://%s:%s", simodHttpHost, simodHttpPort)
+
+	watcherController = newWatcherController()
 )
 
 func main() {
@@ -271,6 +273,8 @@ func submitJob(requestId string) (jobName string, err error) {
 func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, brokerChannel *amqp.Channel) {
 	log.Printf("starting pods watcher for job %s", jobName)
 
+	watcherController.Increment()
+
 	podsClient, err := setupAndMakePodsClient()
 	if err != nil {
 		log.Printf("failed to setup pods client: %s", err)
@@ -289,6 +293,8 @@ func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, br
 	podsWatcherChan := podsWatcher.ResultChan()
 
 	go func() {
+		defer watcherController.Decrement()
+
 		for event := range podsWatcherChan {
 			switch event.Type {
 			case watch.Error:
