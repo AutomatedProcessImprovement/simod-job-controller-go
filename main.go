@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	version = "0.4.0"
+	version = "0.4.2"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -392,37 +392,6 @@ func setupKubernetesIfNotSet() (*kubernetes.Clientset, error) {
 	return kubernetesClientset, nil
 }
 
-func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
-	log.Printf("publishing status %s for %s", status, requestId)
-
-	err := brokerChannel.ExchangeDeclare(
-		exchangeName,
-		"topic",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	failOnError(err, "failed to declare an exchange")
-
-	routingKey := fmt.Sprintf("requests.status.%s", status)
-
-	ctx := context.Background()
-	err = brokerChannel.PublishWithContext(
-		ctx,
-		exchangeName,
-		routingKey,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(requestId),
-		},
-	)
-	failOnError(err, "failed to publish a message")
-}
-
 type patchJobRequestBody struct {
 	Status string `json:"status"`
 }
@@ -437,7 +406,7 @@ func updateJobStatusHttp(requestId, status string) error {
 		return fmt.Errorf("failed to marshal payload: %s", err)
 	}
 
-	request, err := http.NewRequest("PATCH", fmt.Sprintf("%s/requests/%s", simodUrl, requestId), bytes.NewBuffer(payloadBytes))
+	request, err := http.NewRequest("PATCH", fmt.Sprintf("%s/discoveries/%s", simodUrl, requestId), bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %s", err)
 	}
@@ -482,6 +451,9 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
 			Namespace: kubernetesNamespace,
+			Labels: map[string]string{
+				"app": "simod-job",
+			},
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoffLimit,
