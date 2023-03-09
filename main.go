@@ -36,6 +36,8 @@ var (
 	simodJobResourceCpuLimit      = os.Getenv("SIMOD_JOB_RESOURCE_CPU_LIMIT")
 	simodJobResourceMemoryRequest = os.Getenv("SIMOD_JOB_RESOURCE_MEMORY_REQUEST")
 	simodJobResourceMemoryLimit   = os.Getenv("SIMOD_JOB_RESOURCE_MEMORY_LIMIT")
+	simodHttpHost                 = os.Getenv("SIMOD_HTTP_HOST")
+	simodHttpPort                 = os.Getenv("SIMOD_HTTP_PORT")
 	kubernetesNamespace           = os.Getenv("KUBERNETES_NAMESPACE")
 
 	// requestsBaseDir is the base directory where all requests are stored on the attached volume
@@ -50,7 +52,7 @@ var (
 	// kubernetesClientset is the clientset that is used to interact with the Kubernetes API
 	kubernetesClientset *kubernetes.Clientset
 
-	simodUrl = "http://simod-http:8000"
+	simodUrl = fmt.Sprintf("http://%s:%s", simodHttpHost, simodHttpPort)
 )
 
 func main() {
