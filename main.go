@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -25,7 +27,7 @@ import (
 )
 
 var (
-	version = "0.3.2"
+	version = "0.4.0"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -47,6 +49,8 @@ var (
 
 	// kubernetesClientset is the clientset that is used to interact with the Kubernetes API
 	kubernetesClientset *kubernetes.Clientset
+
+	simodUrl = "http://simod-http:8000"
 )
 
 func main() {
@@ -221,7 +225,7 @@ func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 	if err != nil {
 		log.Printf("failed to submit job for %s: %s", requestId, err)
 		newStatus := "failed"
-		publishJobStatus(requestId, newStatus, brokerChannel)
+		updateJobStatusHttp(requestId, newStatus)
 	} else {
 		watchPodsAndPrepareArchive(jobName, requestId, currentStatus, brokerChannel)
 	}
@@ -309,7 +313,7 @@ func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, br
 				}
 
 				if podStatus != previousJobStatus {
-					publishJobStatus(requestId, podStatus, brokerChannel)
+					updateJobStatusHttp(requestId, podStatus)
 					prometheusMetrics.updateJob(previousJobStatus, podStatus, requestId)
 					previousJobStatus = podStatus
 				}
@@ -317,7 +321,7 @@ func watchPodsAndPrepareArchive(jobName, requestId, previousJobStatus string, br
 				if podStatus == "succeeded" {
 					if _, err := prepareArchive(requestId); err != nil {
 						log.Printf("failed to prepare archive for %s", requestId)
-						publishJobStatus(requestId, "failed", brokerChannel)
+						updateJobStatusHttp(requestId, "failed")
 					}
 					podsWatcher.Stop()
 					return
@@ -416,7 +420,42 @@ func publishJobStatus(requestId, status string, brokerChannel *amqp.Channel) {
 			Body:        []byte(requestId),
 		},
 	)
-	failOnError(err, "Failed to publish a message")
+	failOnError(err, "failed to publish a message")
+}
+
+type patchJobRequestBody struct {
+	Status string `json:"status"`
+}
+
+func updateJobStatusHttp(requestId, status string) error {
+	payload := patchJobRequestBody{
+		Status: status,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %s", err)
+	}
+
+	request, err := http.NewRequest("PATCH", fmt.Sprintf("%s/requests/%s", simodUrl, requestId), bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %s", err)
+	}
+
+	request.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %s", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", response.StatusCode)
+	}
+
+	return nil
 }
 
 func prepareArchive(requestId string) (archivePath string, err error) {
