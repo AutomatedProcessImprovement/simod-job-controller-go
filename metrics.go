@@ -28,7 +28,7 @@ func (r *timeRecord) Duration() time.Duration {
 	return r.end.Sub(*r.start)
 }
 
-func newMetrics(registry prometheus.Registerer) *metrics {
+func NewMetrics(registry prometheus.Registerer) *metrics {
 	m := &metrics{
 		jobsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -61,7 +61,7 @@ func newMetrics(registry prometheus.Registerer) *metrics {
 	return m
 }
 
-func (m *metrics) addNewJob(status, requestId string) {
+func (m *metrics) AddNewJob(status, requestId string) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
@@ -76,7 +76,7 @@ func (m *metrics) addNewJob(status, requestId string) {
 	})
 }
 
-func (m *metrics) updateJob(previousStatus, newStatus, requestId string) {
+func (m *metrics) UpdateJob(previousStatus, newStatus, requestId string) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
