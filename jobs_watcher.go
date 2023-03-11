@@ -136,6 +136,19 @@ func (w *JobsWatcher) DeleteJob(requestID string) {
 	w.mx.Lock()
 	defer w.mx.Unlock()
 
+	status, ok := w.jobStatuses[requestID]
+	if !ok {
+		return
+	}
+
+	if status == "pending" || status == "running" {
+		prometheusMetrics.UpdateJob(status, "failed", requestID)
+		
+		if err := patchJobStatus(requestID, status); err != nil {
+			log.Printf("failed to patch job status for request %s: %s", requestID, err)
+		}
+	}
+
 	delete(w.jobStatuses, requestID)
 }
 

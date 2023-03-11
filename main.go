@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	version = "0.5.5"
+	version = "0.5.6"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
