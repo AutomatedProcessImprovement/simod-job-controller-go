@@ -11,7 +11,7 @@ type patchJobRequestBody struct {
 	Status string `json:"status"`
 }
 
-func updateJobStatusHttp(requestId, status string) error {
+func patchJobStatus(requestId, status string) error {
 	payload := patchJobRequestBody{
 		Status: status,
 	}

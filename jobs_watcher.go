@@ -111,6 +111,10 @@ func (w *JobsWatcher) HandleJobStatusChange(requestID, status string) {
 		prometheusMetrics.UpdateJob(previousStatus, status, requestID)
 	}
 
+	if err := patchJobStatus(requestID, status); err != nil {
+		log.Printf("failed to patch job status for request %s: %s", requestID, err)
+	}
+
 	if status == "succeeded" {
 		if _, err := prepareArchive(requestID); err != nil {
 			log.Printf("failed to prepare archive for request %s: %s", requestID, err)
