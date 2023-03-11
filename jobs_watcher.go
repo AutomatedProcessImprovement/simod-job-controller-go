@@ -12,19 +12,19 @@ import (
 	clientCoreV1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
-type JobWatcher struct {
+type JobsWatcher struct {
 	jobStatuses map[string]string
 
 	mx sync.Mutex
 }
 
-func NewJobWatcher() *JobWatcher {
-	return &JobWatcher{
+func NewJobWatcher() *JobsWatcher {
+	return &JobsWatcher{
 		jobStatuses: make(map[string]string),
 	}
 }
 
-func (w *JobWatcher) Run() {
+func (w *JobsWatcher) Run() {
 	log.Printf("starting job watcher")
 
 	jobsClient, err := setupAndMakeJobsClient()
@@ -67,6 +67,9 @@ func (w *JobWatcher) Run() {
 				continue
 			}
 			log.Printf("job %s was deleted", job.Name)
+
+			requestID := job.Labels["request-id"]
+			w.DeleteJob(requestID)
 		case watch.Added, watch.Modified:
 			job, ok := event.Object.(*batchv1.Job)
 			if !ok {
@@ -93,7 +96,7 @@ func (w *JobWatcher) Run() {
 	}
 }
 
-func (w *JobWatcher) HandleJobStatusChange(requestID, status string) {
+func (w *JobsWatcher) HandleJobStatusChange(requestID, status string) {
 	w.mx.Lock()
 	defer w.mx.Unlock()
 
@@ -113,10 +116,25 @@ func (w *JobWatcher) HandleJobStatusChange(requestID, status string) {
 			log.Printf("failed to prepare archive for request %s: %s", requestID, err)
 		}
 	}
+}
 
-	if status == "succeeded" || status == "failed" {
-		delete(w.jobStatuses, requestID)
+func (w *JobsWatcher) GetJobStatus(requestID string) string {
+	w.mx.Lock()
+	defer w.mx.Unlock()
+
+	status, ok := w.jobStatuses[requestID]
+	if !ok {
+		return ""
 	}
+
+	return status
+}
+
+func (w *JobsWatcher) DeleteJob(requestID string) {
+	w.mx.Lock()
+	defer w.mx.Unlock()
+
+	delete(w.jobStatuses, requestID)
 }
 
 func parseJobStatus(job *batchv1.Job) string {
