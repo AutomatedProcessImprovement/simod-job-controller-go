@@ -40,8 +40,6 @@ var (
 	kubernetesClientset *kubernetes.Clientset
 
 	simodUrl = fmt.Sprintf("http://%s:%s", simodHttpHost, simodHttpPort)
-
-	watcherCounter = newWatcherCounter()
 )
 
 func main() {
