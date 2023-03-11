@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	version = "0.5.0"
+	version = "0.5.2"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -41,7 +41,7 @@ var (
 
 	simodUrl = fmt.Sprintf("http://%s:%s", simodHttpHost, simodHttpPort)
 
-	watcherController = newWatcherController()
+	watcherCounter = newWatcherCounter()
 )
 
 func main() {
@@ -116,78 +116,22 @@ func printEnv() {
 }
 
 func run() {
-	conn, err := amqp.Dial(brokerUrl)
-	failOnError(err, "failed to connect to RabbitMQ")
-	defer conn.Close()
+	brokerClient := NewBrokerClient(exchangeName, brokerUrl)
 
-	go func() {
-		log.Printf("closing: %s", <-conn.NotifyClose(make(chan *amqp.Error)))
-		os.Exit(1)
-	}()
-
-	channel, err := conn.Channel()
-	failOnError(err, "failed to open a channel")
-	defer channel.Close()
-
-	durable := true
-	autoDelete := false
-	internal := false
-	noWait := false
-	extraParams := amqp.Table{}
-	err = channel.ExchangeDeclare(
-		exchangeName,
-		"topic",
-		durable,
-		autoDelete,
-		internal,
-		noWait,
-		extraParams,
-	)
-	failOnError(err, "failed to declare a queue")
-
-	exclusive := true
-	pendingQueue, err := channel.QueueDeclare(
-		"",
-		durable,
-		autoDelete,
-		exclusive,
-		noWait,
-		extraParams,
-	)
-	failOnError(err, "failed to declare a queue")
-
-	err = channel.QueueBind(
-		pendingQueue.Name,
-		"requests.status.pending",
-		exchangeName,
-		noWait,
-		extraParams,
-	)
-	failOnError(err, "failed to bind a queue")
-
-	consumerName := ""
-	autoAck := false
-	noLocal := false
-	pendingMsgs, err := channel.Consume(
-		pendingQueue.Name,
-		consumerName,
-		autoAck,
-		exclusive,
-		noLocal,
-		noWait,
-		extraParams,
-	)
-	failOnError(err, "failed to register a consumer")
+	pendingMsgs, err := brokerClient.Consume()
+	failOnError(err, "failed to consume messages")
 
 	forever := make(chan bool)
 
 	go func() {
 		for d := range pendingMsgs {
-			go handleDelivery(d, channel)
+			go handleDelivery(d, brokerClient.channel)
 		}
 	}()
 
 	setupMetricsAndServe()
+
+	go NewJobWatcher().Run()
 
 	log.Printf("waiting for messages")
 	<-forever
@@ -195,7 +139,7 @@ func run() {
 
 func setupMetricsAndServe() {
 	registry := prometheus.NewRegistry()
-	prometheusMetrics = NewMetrics(registry)
+	prometheusMetrics = newMetrics(registry)
 
 	go func() {
 		http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
@@ -206,21 +150,12 @@ func setupMetricsAndServe() {
 func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 	defer d.Ack(false)
 
-	requestId := string(d.Body)
-	currentStatus := extractStatus(d.RoutingKey)
+	requestID := string(d.Body)
 
-	job := NewJob(requestId, currentStatus, prometheusMetrics, brokerChannel)
-
-	_, err := job.SubmitToKubernetes()
-	if err != nil {
-		log.Printf("failed to submit job for %s: %s", requestId, err)
-		if err = job.SetFailed(); err != nil {
-			log.Printf("failed to fail job for %s: %s", requestId, err)
-		}
+	if _, err := submitKubernetesJob(requestID); err != nil {
+		log.Printf("failed to submit job for %s: %s", requestID, err)
 		return
 	}
-
-	job.Watch()
 }
 
 func extractStatus(routingKey string) string {

@@ -9,7 +9,6 @@ import (
 )
 
 type metrics struct {
-	jobsTotal     *prometheus.CounterVec
 	jobsGauges    *prometheus.GaugeVec
 	jobsDurations *prometheus.HistogramVec
 
@@ -28,15 +27,8 @@ func (r *timeRecord) Duration() time.Duration {
 	return r.end.Sub(*r.start)
 }
 
-func NewMetrics(registry prometheus.Registerer) *metrics {
+func newMetrics(registry prometheus.Registerer) *metrics {
 	m := &metrics{
-		jobsTotal: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "simod_jobs_total",
-				Help: "Total number of jobs",
-			},
-			[]string{"status", "request_id"},
-		),
 		jobsGauges: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "simod_jobs_gauge",
@@ -54,7 +46,6 @@ func NewMetrics(registry prometheus.Registerer) *metrics {
 		jobsDurationsMap: make(map[string][]*timeRecord),
 	}
 
-	registry.MustRegister(m.jobsTotal)
 	registry.MustRegister(m.jobsGauges)
 	registry.MustRegister(m.jobsDurations)
 
@@ -65,9 +56,9 @@ func (m *metrics) AddNewJob(status, requestId string) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	m.jobsTotal.WithLabelValues(status, requestId).Inc()
 	m.jobsGauges.WithLabelValues(status, requestId).Inc()
 	m.jobsDurationsMap[requestId] = make([]*timeRecord, 0)
+	
 	now := time.Now()
 	m.jobsDurationsMap[requestId] = append(m.jobsDurationsMap[requestId], &timeRecord{
 		status: status,
@@ -87,7 +78,6 @@ func (m *metrics) UpdateJob(previousStatus, newStatus, requestId string) {
 
 	m.jobsGauges.WithLabelValues(previousStatus, requestId).Dec()
 	m.jobsGauges.WithLabelValues(newStatus, requestId).Inc()
-	m.jobsTotal.WithLabelValues(newStatus, requestId).Inc()
 
 	now := time.Now()
 	records, ok := m.jobsDurationsMap[requestId]

@@ -44,7 +44,7 @@ func NewJob(requestID, initialState string, promMetrics *metrics, brokerChannel 
 }
 
 func (j *Job) enterState(e *fsm.Event) {
-	log.Printf("job %s changes state from %s to %s", j.RequestID, e.Src, e.Dst)
+	log.Printf("job %s changes state from %s to %s", j.Name, e.Src, e.Dst)
 	prometheusMetrics.UpdateJob(e.Src, e.Dst, j.RequestID)
 	updateJobStatusHttp(j.RequestID, e.Dst)
 }
@@ -113,7 +113,20 @@ func (j *Job) SubmitToKubernetes() (jobName string, err error) {
 }
 
 func (j *Job) Watch() {
-	watcherController.Increment()
-	watchPodsAndPrepareArchive(j)
-	watcherController.Decrement()
+	watcherCounter.Increment()
+
+	err := watchPodsAndPrepareArchive(j)
+
+	if err != nil {
+		j.SetFailedWithoutErr()
+	} else {
+		if _, err := prepareArchive(j.RequestID); err != nil {
+			log.Printf("failed to prepare archive for %s", j.RequestID)
+			j.SetFailedWithoutErr()
+		} else {
+			j.SetSucceededWithoutErr()
+		}
+	}
+
+	watcherCounter.Decrement()
 }

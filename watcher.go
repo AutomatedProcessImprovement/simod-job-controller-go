@@ -1,25 +1,38 @@
 package main
 
-import "log"
+import (
+	"log"
+	"sync"
+)
 
-type WatcherController struct {
+type WatcherCounter struct {
 	counter int
+	mx      sync.Mutex
 }
 
-func newWatcherController() *WatcherController {
-	return &WatcherController{counter: 0}
+func newWatcherCounter() *WatcherCounter {
+	return &WatcherCounter{counter: 0}
 }
 
-func (w *WatcherController) Increment() {
+func (w *WatcherCounter) Increment() {
+	w.mx.Lock()
+	defer w.mx.Unlock()
+
 	w.counter++
 	log.Printf("incrementing counter to %d", w.counter)
 }
 
-func (w *WatcherController) Decrement() {
+func (w *WatcherCounter) Decrement() {
+	w.mx.Lock()
+	defer w.mx.Unlock()
+
 	w.counter--
 	log.Printf("decrementing counter to %d", w.counter)
 }
 
-func (w *WatcherController) Get() int {
+func (w *WatcherCounter) Get() int {
+	w.mx.Lock()
+	defer w.mx.Unlock()
+
 	return w.counter
 }

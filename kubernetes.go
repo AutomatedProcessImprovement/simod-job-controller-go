@@ -91,7 +91,7 @@ func setupKubernetesIfNotSet() (*kubernetes.Clientset, error) {
 
 func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *batchv1.Job {
 	backoffLimit := int32(0)
-	ttlSeconds := int32(60 * 3)
+	ttlSeconds := int32(60 * 10)
 
 	jobName := jobNameFromRequestId(requestId)
 
@@ -100,7 +100,8 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 			Name:      jobName,
 			Namespace: kubernetesNamespace,
 			Labels: map[string]string{
-				"app": "simod-job",
+				"app":        "simod-job",
+				"request-id": requestId,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -153,15 +154,13 @@ func jobNameFromRequestId(requestId string) string {
 	return fmt.Sprintf("simod-%s", requestId)
 }
 
-func watchPodsAndPrepareArchive(job *Job) {
+func watchPodsAndPrepareArchive(job *Job) error {
 	previousJobStatus := job.State()
 	log.Printf("starting pods watcher for job %s with status %s", job.Name, previousJobStatus)
 
 	podsClient, err := setupAndMakePodsClient()
 	if err != nil {
-		log.Printf("failed to setup pods client: %s", err)
-		job.SetFailedWithoutErr()
-		return
+		return fmt.Errorf("failed to setup pods client: %s", err)
 	}
 
 	podsWatcher, err := podsClient.Watch(context.Background(), metav1.ListOptions{
@@ -169,9 +168,7 @@ func watchPodsAndPrepareArchive(job *Job) {
 		Watch:         true,
 	})
 	if err != nil {
-		log.Printf("failed to watch pods for job %s: %s", job.Name, err)
-		job.SetFailedWithoutErr()
-		return
+		return fmt.Errorf("failed to watch pods for job %s: %s", job.Name, err)
 	}
 
 	defer func() {
@@ -184,19 +181,14 @@ func watchPodsAndPrepareArchive(job *Job) {
 	for event := range podsWatcherChan {
 		switch event.Type {
 		case watch.Error:
-			log.Printf("error watching pods for job %s: %s", job.Name, event.Object)
-			job.SetFailedWithoutErr()
-			return
+			return fmt.Errorf("error watching pods for job %s: %s", job.Name, event.Object)
 		case watch.Deleted:
 			log.Printf("pod for job %s was deleted", job.Name)
-			job.SetSucceededWithoutErr()
-			return
+			return nil
 		case watch.Added, watch.Modified:
 			pod, ok := event.Object.(*corev1.Pod)
 			if !ok {
-				log.Printf("failed to cast event object to pod")
-				job.SetFailedWithoutErr()
-				return
+				return fmt.Errorf("failed to cast event object to pod")
 			}
 
 			podStatus := parsePodStatus(pod)
@@ -212,16 +204,9 @@ func watchPodsAndPrepareArchive(job *Job) {
 			case "running":
 				job.SetRunningWithoutErr()
 			case "succeeded":
-				if _, err := prepareArchive(job.RequestID); err != nil {
-					log.Printf("failed to prepare archive for %s", job.RequestID)
-					job.SetFailedWithoutErr()
-				} else {
-					job.SetSucceededWithoutErr()
-				}
-				return
+				return nil
 			case "failed":
-				job.SetFailedWithoutErr()
-				return
+				return fmt.Errorf("pod %s for job %s failed", pod.Name, job.Name)
 			default:
 				log.Printf("unhandled pod's status for job %s: %s", job.Name, podStatus)
 			}
@@ -229,6 +214,8 @@ func watchPodsAndPrepareArchive(job *Job) {
 			log.Printf("unhandled pod's event type for job %s: %s", job.Name, event.Type)
 		}
 	}
+
+	return nil
 }
 
 func parsePodStatus(pod *corev1.Pod) string {
