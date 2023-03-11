@@ -125,10 +125,10 @@ func run() {
 	log.Printf("waiting for messages")
 
 	go watchKubernetesJobs()
-	log.Printf("watching Kubernetes jobs")
+	log.Printf("watching kubernetes jobs")
 
 	go setupMetricsAndServe()
-	log.Printf("serving Prometheus metrics at :8080/metrics")
+	log.Printf("serving prometheus metrics at :8080/metrics")
 
 	<-forever
 }

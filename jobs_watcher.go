@@ -25,8 +25,6 @@ func NewJobWatcher() *JobsWatcher {
 }
 
 func (w *JobsWatcher) Run() {
-	log.Printf("starting job watcher")
-
 	jobsClient, err := setupAndMakeJobsClient()
 	if err != nil {
 		log.Printf("failed to setup jobs client: %s", err)
