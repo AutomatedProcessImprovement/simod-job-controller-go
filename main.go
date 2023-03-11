@@ -39,7 +39,7 @@ var (
 	// kubernetesClientset is the clientset that is used to interact with the Kubernetes API
 	kubernetesClientset *kubernetes.Clientset
 
-	simodUrl = fmt.Sprintf("http://%s:%s", simodHttpHost, simodHttpPort)
+	simodURL = fmt.Sprintf("http://%s:%s", simodHttpHost, simodHttpPort)
 )
 
 func main() {

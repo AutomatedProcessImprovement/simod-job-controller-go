@@ -21,7 +21,7 @@ func updateJobStatusHttp(requestId, status string) error {
 		return fmt.Errorf("failed to marshal payload: %s", err)
 	}
 
-	request, err := http.NewRequest("PATCH", fmt.Sprintf("%s/discoveries/%s", simodUrl, requestId), bytes.NewBuffer(payloadBytes))
+	request, err := http.NewRequest("PATCH", fmt.Sprintf("%s/discoveries/%s", simodURL, requestId), bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %s", err)
 	}
