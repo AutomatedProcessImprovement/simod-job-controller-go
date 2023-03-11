@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	version = "0.5.2"
+	version = "0.5.5"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -123,28 +123,37 @@ func run() {
 
 	forever := make(chan bool)
 
-	go func() {
-		for d := range pendingMsgs {
-			go handleDelivery(d, brokerClient.channel)
-		}
-	}()
-
-	setupMetricsAndServe()
-
-	go NewJobWatcher().Run()
-
+	go serveQueue(pendingMsgs, brokerClient.channel)
 	log.Printf("waiting for messages")
+
+	go watchKubernetesJobs()
+	log.Printf("watching Kubernetes jobs")
+
+	go setupMetricsAndServe()
+	log.Printf("serving Prometheus metrics at :8080/metrics")
+
 	<-forever
+}
+
+func serveQueue(pendingMsgs <-chan amqp.Delivery, channel *amqp.Channel) {
+	for d := range pendingMsgs {
+		go handleDelivery(d, channel)
+	}
+}
+
+func watchKubernetesJobs() {
+	for {
+		NewJobWatcher().Run()
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func setupMetricsAndServe() {
 	registry := prometheus.NewRegistry()
 	prometheusMetrics = newMetrics(registry)
 
-	go func() {
-		http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
-		http.ListenAndServe(":8080", nil)
-	}()
+	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
+	http.ListenAndServe(":8080", nil)
 }
 
 func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
@@ -156,11 +165,6 @@ func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 		log.Printf("failed to submit job for %s: %s", requestID, err)
 		return
 	}
-}
-
-func extractStatus(routingKey string) string {
-	parts := strings.Split(routingKey, ".")
-	return parts[len(parts)-1]
 }
 
 func failOnError(err error, msg string) {

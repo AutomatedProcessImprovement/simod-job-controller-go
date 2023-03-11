@@ -12,7 +12,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	clientBatchV1 "k8s.io/client-go/kubernetes/typed/batch/v1"
 	clientCoreV1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -91,7 +90,10 @@ func setupKubernetesIfNotSet() (*kubernetes.Clientset, error) {
 
 func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *batchv1.Job {
 	backoffLimit := int32(0)
-	ttlSeconds := int32(60 * 10)
+
+	// It's important to set ttlSeconds to 0, otherwise finished and hanging jobs will be recorded with Prometheus several times.
+	// This can be resolved if a permanent storage for Simod Jobs is set up.
+	ttlSeconds := int32(0)
 
 	jobName := jobNameFromRequestId(requestId)
 
@@ -152,70 +154,6 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 
 func jobNameFromRequestId(requestId string) string {
 	return fmt.Sprintf("simod-%s", requestId)
-}
-
-func watchPodsAndPrepareArchive(job *Job) error {
-	previousJobStatus := job.State()
-	log.Printf("starting pods watcher for job %s with status %s", job.Name, previousJobStatus)
-
-	podsClient, err := setupAndMakePodsClient()
-	if err != nil {
-		return fmt.Errorf("failed to setup pods client: %s", err)
-	}
-
-	podsWatcher, err := podsClient.Watch(context.Background(), metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("job-name=%s", job.Name),
-		Watch:         true,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to watch pods for job %s: %s", job.Name, err)
-	}
-
-	defer func() {
-		podsWatcher.Stop()
-		log.Printf("pods watcher for job %s stopped", job.Name)
-	}()
-
-	podsWatcherChan := podsWatcher.ResultChan()
-
-	for event := range podsWatcherChan {
-		switch event.Type {
-		case watch.Error:
-			return fmt.Errorf("error watching pods for job %s: %s", job.Name, event.Object)
-		case watch.Deleted:
-			log.Printf("pod for job %s was deleted", job.Name)
-			return nil
-		case watch.Added, watch.Modified:
-			pod, ok := event.Object.(*corev1.Pod)
-			if !ok {
-				return fmt.Errorf("failed to cast event object to pod")
-			}
-
-			podStatus := parsePodStatus(pod)
-			log.Printf("pod %s for job %s is %s", pod.Name, job.Name, podStatus)
-
-			if podStatus == "" {
-				continue
-			}
-
-			switch podStatus {
-			case "", "pending":
-				continue
-			case "running":
-				job.SetRunningWithoutErr()
-			case "succeeded":
-				return nil
-			case "failed":
-				return fmt.Errorf("pod %s for job %s failed", pod.Name, job.Name)
-			default:
-				log.Printf("unhandled pod's status for job %s: %s", job.Name, podStatus)
-			}
-		default:
-			log.Printf("unhandled pod's event type for job %s: %s", job.Name, event.Type)
-		}
-	}
-
-	return nil
 }
 
 func parsePodStatus(pod *corev1.Pod) string {
