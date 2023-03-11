@@ -15,7 +15,6 @@ const (
 )
 
 var (
-	errNotReady      = errors.New("broker client is not ready")
 	errAlreadyClosed = errors.New("broker client is not connected")
 )
 
@@ -188,8 +187,11 @@ func (c *BrokerClient) changeChannel(channel *amqp.Channel) {
 }
 
 func (c *BrokerClient) Consume() (<-chan amqp.Delivery, error) {
-	if !c.isReady {
-		return nil, errNotReady
+	for i := 0; i < 10; i++ {
+		if c.isReady {
+			break
+		}
+		time.Sleep(1 * time.Second)
 	}
 
 	if err := c.channel.Qos(1, 0, false); err != nil {
