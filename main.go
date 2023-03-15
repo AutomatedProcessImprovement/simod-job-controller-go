@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	version = "0.5.6"
+	version = "0.5.7"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
@@ -125,7 +125,6 @@ func run() {
 	log.Printf("waiting for messages")
 
 	go watchKubernetesJobs()
-	log.Printf("watching kubernetes jobs")
 
 	go setupMetricsAndServe()
 	log.Printf("serving prometheus metrics at :8080/metrics")

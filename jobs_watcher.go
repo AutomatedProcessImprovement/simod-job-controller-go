@@ -25,6 +25,8 @@ func NewJobWatcher() *JobsWatcher {
 }
 
 func (w *JobsWatcher) Run() {
+	log.Printf("watching kubernetes jobs")
+
 	jobsClient, err := setupAndMakeJobsClient()
 	if err != nil {
 		log.Printf("failed to setup jobs client: %s", err)
@@ -143,7 +145,7 @@ func (w *JobsWatcher) DeleteJob(requestID string) {
 
 	if status == "pending" || status == "running" {
 		prometheusMetrics.UpdateJob(status, "failed", requestID)
-		
+
 		if err := patchJobStatus(requestID, status); err != nil {
 			log.Printf("failed to patch job status for request %s: %s", requestID, err)
 		}
