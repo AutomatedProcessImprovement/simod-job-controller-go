@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	clientCoreV1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -89,6 +92,10 @@ func (w *JobsWatcher) Run() {
 			}
 
 			log.Printf("job %s is %s", job.Name, status)
+
+			if status == "failed" {
+				log.Printf("failed job %s logs: %s", job.Name, getJobLogs(podsClient, job.Name))
+			}
 
 			requestID := job.Labels["request-id"]
 			w.HandleJobStatusChange(requestID, status)
@@ -195,4 +202,33 @@ func getPodStatus(podsClient clientCoreV1.PodInterface, jobName string) string {
 	}
 
 	return statuses[0]
+}
+
+func getJobLogs(podsClient clientCoreV1.PodInterface, jobName string) string {
+	pods, err := podsClient.List(context.Background(), metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+	})
+	if err != nil {
+		log.Printf("failed to list pods for job %s: %s", jobName, err)
+		return ""
+	}
+
+	var logs bytes.Buffer
+
+	for _, pod := range pods.Items {
+		podLogs, err := podsClient.GetLogs(pod.Name, &corev1.PodLogOptions{}).Stream(context.Background())
+		if err != nil {
+			log.Printf("failed to get logs for pod %s: %s", pod.Name, err)
+			continue
+		}
+
+		defer podLogs.Close()
+
+		if _, err := io.Copy(&logs, podLogs); err != nil {
+			log.Printf("failed to copy logs for pod %s: %s", pod.Name, err)
+			continue
+		}
+	}
+
+	return logs.String()
 }
