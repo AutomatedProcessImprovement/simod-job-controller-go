@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,24 +15,19 @@ import (
 )
 
 var (
-	version = "0.5.7"
+	version = "0.6.0"
 
 	brokerUrl                     = os.Getenv("BROKER_URL")
 	exchangeName                  = os.Getenv("SIMOD_EXCHANGE_NAME")
 	simodDockerImage              = os.Getenv("SIMOD_DOCKER_IMAGE")
 	simodJobResourceCpuRequest    = os.Getenv("SIMOD_JOB_RESOURCE_CPU_REQUEST")
-	simodJobResourceCpuLimit      = os.Getenv("SIMOD_JOB_RESOURCE_CPU_LIMIT")
 	simodJobResourceMemoryRequest = os.Getenv("SIMOD_JOB_RESOURCE_MEMORY_REQUEST")
-	simodJobResourceMemoryLimit   = os.Getenv("SIMOD_JOB_RESOURCE_MEMORY_LIMIT")
 	simodHttpHost                 = os.Getenv("SIMOD_HTTP_HOST")
 	simodHttpPort                 = os.Getenv("SIMOD_HTTP_PORT")
 	kubernetesNamespace           = os.Getenv("KUBERNETES_NAMESPACE")
 
 	// requestsBaseDir is the base directory where all requests are stored on the attached volume
 	requestsBaseDir = "/tmp/simod-volume/data/requests"
-
-	// configurationFileName is the name of the configuration file that is expected to be present in the request directory
-	configurationFileName = "configuration.yaml"
 
 	// prometheusMetrics is the metrics object that is used to expose metrics to Prometheus
 	prometheusMetrics *metrics
@@ -88,16 +84,8 @@ func validateEnv() {
 		log.Fatal("SIMOD_JOB_RESOURCE_CPU_REQUEST is not set")
 	}
 
-	if simodJobResourceCpuLimit == "" {
-		log.Fatal("SIMOD_JOB_RESOURCE_CPU_LIMIT is not set")
-	}
-
 	if simodJobResourceMemoryRequest == "" {
 		log.Fatal("SIMOD_JOB_RESOURCE_MEMORY_REQUEST is not set")
-	}
-
-	if simodJobResourceMemoryLimit == "" {
-		log.Fatal("SIMOD_JOB_RESOURCE_MEMORY_LIMIT is not set")
 	}
 }
 
@@ -107,9 +95,7 @@ func printEnv() {
 	log.Printf("SIMOD_EXCHANGE_NAME: %s", exchangeName)
 	log.Printf("SIMOD_DOCKER_IMAGE: %s", simodDockerImage)
 	log.Printf("SIMOD_JOB_RESOURCE_CPU_REQUEST: %s", simodJobResourceCpuRequest)
-	log.Printf("SIMOD_JOB_RESOURCE_CPU_LIMIT: %s", simodJobResourceCpuLimit)
 	log.Printf("SIMOD_JOB_RESOURCE_MEMORY_REQUEST: %s", simodJobResourceMemoryRequest)
-	log.Printf("SIMOD_JOB_RESOURCE_MEMORY_LIMIT: %s", simodJobResourceMemoryLimit)
 	log.Printf("KUBERNETES_NAMESPACE: %s", kubernetesNamespace)
 }
 
@@ -156,12 +142,27 @@ func setupMetricsAndServe() {
 func handleDelivery(d amqp.Delivery, brokerChannel *amqp.Channel) {
 	defer d.Ack(false)
 
-	requestID := string(d.Body)
-
-	if _, err := submitKubernetesJob(requestID); err != nil {
-		log.Printf("failed to submit job for %s: %s", requestID, err)
+	pendingRequest, err := parsePendingRequestMessage(d.Body)
+	if err != nil {
+		log.Printf("failed to parse pending request message: %s", err)
 		return
 	}
+
+	if _, err := submitKubernetesJob(pendingRequest); err != nil {
+		log.Printf("failed to submit job for %s: %s", pendingRequest.RequestID, err)
+		return
+	}
+}
+
+type pendingRequest struct {
+	RequestID         string `json:"request_id"`
+	ConfigurationPath string `json:"configuration_path"`
+}
+
+func parsePendingRequestMessage(body []byte) (pendingRequest, error) {
+	var pendingRequest pendingRequest
+	err := json.Unmarshal(body, &pendingRequest)
+	return pendingRequest, err
 }
 
 func failOnError(err error, msg string) {

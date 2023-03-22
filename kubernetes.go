@@ -18,31 +18,29 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-func submitKubernetesJob(requestId string) (jobName string, err error) {
-	log.Printf("submitting job for %s", requestId)
+func submitKubernetesJob(request pendingRequest) (jobName string, err error) {
+	log.Printf("submitting job for %s", request.RequestID)
 
 	jobsClient, err := setupAndMakeJobsClient()
 	if err != nil {
 		return "", fmt.Errorf("failed to setup jobs client: %s", err)
 	}
 
-	requestOutputDir := path.Join(requestsBaseDir, requestId)
-	configPath := path.Join(requestOutputDir, configurationFileName)
-	resultsOutputDir := path.Join(requestOutputDir, "results")
+	resultsOutputDir := path.Join(requestsBaseDir, request.RequestID, "results")
 	err = os.MkdirAll(resultsOutputDir, 0755)
 	if err != nil {
 		return "", fmt.Errorf("failed to create results output dir at %s: %s", resultsOutputDir, err)
 	}
 
-	job := makeJobForRequest(requestId, configPath, resultsOutputDir)
+	job := makeJobForRequest(request.RequestID, request.ConfigurationPath, resultsOutputDir)
 	if job == nil {
-		return "", fmt.Errorf("failed to create job for %s", requestId)
+		return "", fmt.Errorf("failed to create job for %s", request.RequestID)
 	}
 
 	ctx := context.Background()
 	_, err = jobsClient.Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
-		return "", fmt.Errorf("failed to create job for %s: %s", requestId, err)
+		return "", fmt.Errorf("failed to create job for %s: %s", request.RequestID, err)
 	}
 
 	return job.Name, err
@@ -93,7 +91,7 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 
 	// It's important to set ttlSeconds to 0, otherwise finished and hanging jobs will be recorded with Prometheus several times.
 	// This can be resolved if a permanent storage for Simod Jobs is set up.
-	ttlSeconds := int32(0)
+	ttlSeconds := int32(180)
 
 	jobName := jobNameFromRequestId(requestId)
 
@@ -123,15 +121,12 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 								},
 							},
 							Resources: corev1.ResourceRequirements{
-								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse(simodJobResourceCpuLimit),
-									corev1.ResourceMemory: resource.MustParse(simodJobResourceMemoryLimit),
-								},
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    resource.MustParse(simodJobResourceCpuRequest),
 									corev1.ResourceMemory: resource.MustParse(simodJobResourceMemoryRequest),
 								},
 							},
+							TerminationMessagePath: fmt.Sprintf("%s/%s/terminationMessage.txt", requestsBaseDir, requestId),
 						},
 					},
 					RestartPolicy: corev1.RestartPolicyOnFailure,
