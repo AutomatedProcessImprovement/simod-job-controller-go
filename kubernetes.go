@@ -108,6 +108,11 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 			BackoffLimit:            &backoffLimit,
 			TTLSecondsAfterFinished: &ttlSeconds,
 			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app": "simod-job",
+					},
+				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
@@ -136,6 +141,20 @@ func makeJobForRequest(requestId, configPath string, resultsOutputDir string) *b
 							VolumeSource: corev1.VolumeSource{
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 									ClaimName: "simod-volume-claim",
+								},
+							},
+						},
+					},
+					Affinity: &corev1.Affinity{
+						PodAntiAffinity: &corev1.PodAntiAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
+								{
+									LabelSelector: &metav1.LabelSelector{
+										MatchExpressions: []metav1.LabelSelectorRequirement{
+											{Key: "app", Operator: metav1.LabelSelectorOpIn, Values: []string{"simod-job"}},
+										},
+									},
+									TopologyKey: "kubernetes.io/hostname",
 								},
 							},
 						},
